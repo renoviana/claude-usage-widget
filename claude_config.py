@@ -4,3 +4,9 @@ HEADERS = {
     'anthropic-client-platform': 'web_claude_ai',
     'content-type': 'application/json',
 }
+
+OAUTH_HEADERS = {
+    'anthropic-beta': 'oauth-2025-04-20',
+}
+
+OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'

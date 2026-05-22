@@ -10,6 +10,7 @@ from curl_cffi import requests
 from datetime import datetime
 
 import claude_config as cfg
+from claude_auth import get_oauth_token, TokenMissing, TokenExpired
 from claude_cookies import get_claude_cookies
 
 REFRESH_INTERVAL = 300  # 5 minutos
@@ -80,23 +81,47 @@ class ClaudeIndicator:
 
         self.menu.show_all()
 
+    def _fetch_oauth(self):
+        token = get_oauth_token()
+        r = requests.get(
+            cfg.OAUTH_USAGE_URL,
+            headers={**cfg.OAUTH_HEADERS, 'Authorization': f'Bearer {token}'},
+            impersonate='firefox133',
+            timeout=10,
+        )
+        if r.status_code in (401, 403):
+            raise TokenExpired(f'auth rejeitada (HTTP {r.status_code}) — rode `claude` para renovar')
+        r.raise_for_status()
+        return r.json()
+
+    def _fetch_cookies(self):
+        cookies = get_claude_cookies()
+        org_id = cookies.get('lastActiveOrg')
+        r = requests.get(
+            f'https://claude.ai/api/organizations/{org_id}/usage',
+            headers=cfg.HEADERS,
+            cookies=cookies,
+            impersonate='firefox133',
+            timeout=10,
+        )
+        if r.status_code == 403 and 'Just a moment' in r.text:
+            raise RuntimeError('bloqueado pelo Cloudflare — abra claude.ai no Firefox')
+        r.raise_for_status()
+        return r.json()
+
     def _fetch(self):
+        oauth_err = None
         try:
-            cookies = get_claude_cookies()
-            org_id = cookies.get('lastActiveOrg')
-            r = requests.get(
-                f'https://claude.ai/api/organizations/{org_id}/usage',
-                headers=cfg.HEADERS,
-                cookies=cookies,
-                impersonate='firefox133',
-                timeout=10,
-            )
-            if r.status_code == 403 and 'Just a moment' in r.text:
-                return None, 'bloqueado pelo Cloudflare — abra claude.ai no Firefox'
-            r.raise_for_status()
-            return r.json(), None
+            return self._fetch_oauth(), None
+        except (TokenMissing, TokenExpired) as exc:
+            oauth_err = str(exc)
         except Exception as exc:
-            return None, str(exc)
+            oauth_err = f'oauth: {exc}'
+
+        try:
+            return self._fetch_cookies(), None
+        except Exception as exc:
+            return None, f'{oauth_err}; cookies: {exc}'
 
     def _fetch_loop(self):
         while True:
@@ -136,8 +161,9 @@ class ClaudeIndicator:
             limit = (extra.get('monthly_limit') or 0) / 100
             currency = extra.get('currency') or ''
             symbol = '$' if currency == 'USD' else ''
-            extra_label_bar = f'{symbol}{_fmt_credits(used)}/{symbol}{_fmt_credits(limit)}'
-            extra_label_menu = f'extra: {symbol}{used:,.2f} / {symbol}{limit:,.2f} ({pct_extra:.1f}%)'
+            sep = ' ' if symbol else ''
+            extra_label_bar = f'{symbol}{sep}{_fmt_credits(used)}/{_fmt_credits(limit)}'
+            extra_label_menu = f'extra: {symbol}{sep}{used:,.2f} / {limit:,.2f} ({pct_extra:.1f}%)'
         else:
             extra_label_bar = ''
             extra_label_menu = 'extra: desabilitado'
