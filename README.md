@@ -1,4 +1,4 @@
-# Claude Widget
+# Claude Usage Widget
 
 AppIndicator para a barra do topo do GNOME/Ubuntu que exibe o consumo do
 [claude.ai](https://claude.ai) em tempo real (janela de 5h, 7d e créditos extras).
