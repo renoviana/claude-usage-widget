@@ -3,7 +3,8 @@
 AppIndicator para a barra do topo do GNOME/Ubuntu que exibe o consumo do
 [claude.ai](https://claude.ai) em tempo real (janela de 5h, 7d e créditos extras).
 
-![claude-widget na barra do topo](claude-icon.png)
+<img width="431" height="28" alt="image" src="https://github.com/user-attachments/assets/785d460b-b1c5-407d-8bd0-5dffbf752220" />
+
 
 ## Como funciona
 
