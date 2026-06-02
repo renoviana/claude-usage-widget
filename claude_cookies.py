@@ -66,6 +66,13 @@ def _read_manual_cookies():
         return json.load(f)
 
 
+def cookies_available() -> bool:
+    """True se existe alguma fonte de cookies acessível (manual ou Firefox)."""
+    if os.path.exists(MANUAL_COOKIES_PATH):
+        return True
+    return _find_firefox_profile() is not None
+
+
 def get_claude_cookies():
     """Lê cookies do claude.ai.
 

@@ -6,30 +6,32 @@ from gi.repository import Gtk, GLib, AyatanaAppIndicator3 as AppIndicator
 import os
 import threading
 import time
-from curl_cffi import requests
-from datetime import datetime
 
-import claude_config as cfg
-from claude_auth import get_oauth_token, TokenMissing, TokenExpired
-from claude_cookies import get_claude_cookies
+from providers import (
+    Provider, ProviderResult, BarItem,
+    ClaudeUsageProvider, FootballProvider, MoonProvider, WeatherProvider,
+)
+from config_dialog import ConfigDialog
+import widget_settings
 
-REFRESH_INTERVAL = 300  # 5 minutos
 APP_ID = 'claude-widget'
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'claude-icon.png')
+ROTATION_INTERVAL_SECONDS = 10
+PIN_SEPARATOR = ' · '
 
 
-def _fmt_credits(n):
-    n = float(n)
-    if n < 1000:
-        return f"{n:.0f}"
-    suffix = 'k' if n < 1_000_000 else 'M'
-    v = n / (1000 if suffix == 'k' else 1_000_000)
-    s = f"{v:.1f}".rstrip('0').rstrip('.')
-    return f"{s}{suffix}"
+class MultiProviderIndicator:
+    def __init__(self, providers: list[Provider]):
+        if not providers:
+            raise ValueError('precisa de pelo menos um provider')
 
+        self.providers = providers
+        self.results: dict[str, ProviderResult] = {
+            p.name: ProviderResult() for p in providers
+        }
+        self._rotation_index = 0
+        self._config_window = None
 
-class ClaudeIndicator:
-    def __init__(self):
         icon = ICON_PATH if os.path.exists(ICON_PATH) else 'utilities-system-monitor'
         self.indicator = AppIndicator.Indicator.new(
             APP_ID,
@@ -39,37 +41,127 @@ class ClaudeIndicator:
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self.indicator.set_label('carregando…', '')
 
-        self._build_menu()
-        self.indicator.set_menu(self.menu)
-
-        threading.Thread(target=self._fetch_loop, daemon=True).start()
-
-    def _build_menu(self):
         self.menu = Gtk.Menu()
+        self.indicator.set_menu(self.menu)
+        self._rebuild_menu()
 
-        self.item_5h = Gtk.MenuItem(label='5h: –')
-        self.item_5h.set_sensitive(False)
-        self.menu.append(self.item_5h)
+        for provider in self.providers:
+            threading.Thread(
+                target=self._fetch_loop,
+                args=(provider,),
+                daemon=True,
+            ).start()
 
-        self.item_7d = Gtk.MenuItem(label='7d: –')
-        self.item_7d.set_sensitive(False)
-        self.menu.append(self.item_7d)
+        GLib.timeout_add_seconds(ROTATION_INTERVAL_SECONDS, self._tick_rotation)
 
-        self.item_extra = Gtk.MenuItem(label='extra: –')
-        self.item_extra.set_sensitive(False)
-        self.menu.append(self.item_extra)
+    def _fetch_loop(self, provider: Provider):
+        while True:
+            try:
+                result = provider.fetch()
+            except Exception as exc:
+                result = ProviderResult(error=f'fetch crashed: {exc}')
+            GLib.idle_add(self._on_provider_update, provider.name, result)
+            time.sleep(provider.next_refresh_seconds())
 
-        self.menu.append(Gtk.SeparatorMenuItem())
+    def _on_provider_update(self, name: str, result: ProviderResult):
+        self.results[name] = result
+        self._rebuild_menu()
+        self._render_bar()
+        return False
 
-        self.item_reset = Gtk.MenuItem(label='reset: –')
-        self.item_reset.set_sensitive(False)
-        self.menu.append(self.item_reset)
+    def _all_items(self) -> list[tuple[Provider, BarItem]]:
+        out = []
+        for p in self.providers:
+            for item in p.items(self.results[p.name]):
+                out.append((p, item))
+        return out
 
-        self.item_status = Gtk.MenuItem(label='—')
-        self.item_status.set_sensitive(False)
-        self.menu.append(self.item_status)
+    def _split_items(self) -> tuple[list, list]:
+        """Retorna (pinned, rotating); pinned segue a ordem da config."""
+        pinned_ids = list(widget_settings.load().get('pinned') or [])
+        pinned_set = set(pinned_ids)
+        pinned_by_id: dict[str, tuple] = {}
+        rotating: list[tuple] = []
+        for prov, item in self._all_items():
+            if item.pin_id and item.pin_id in pinned_set:
+                pinned_by_id[item.pin_id] = (prov, item)
+            else:
+                rotating.append((prov, item))
+        pinned = [pinned_by_id[pid] for pid in pinned_ids if pid in pinned_by_id]
+        return pinned, rotating
 
-        self.menu.append(Gtk.SeparatorMenuItem())
+    def _render_bar(self):
+        pinned, rotating = self._split_items()
+        if not pinned and not rotating:
+            self.indicator.set_label('—', '')
+            return
+
+        pinned_text = PIN_SEPARATOR.join(item.label for _, item in pinned)
+
+        rotating_text = ''
+        rotating_icon_pair = None
+        if rotating:
+            if self._rotation_index >= len(rotating):
+                self._rotation_index = 0
+            prov_r, item_r = rotating[self._rotation_index]
+            rotating_text = item_r.label
+            if item_r.icon_path:
+                rotating_icon_pair = (item_r.icon_path, prov_r.name)
+
+        # Rotativo logo após o ícone (esquerda), fixos na direita.
+        if pinned_text and rotating_text:
+            label = f'{rotating_text}{PIN_SEPARATOR}{pinned_text}'
+        elif pinned_text:
+            label = pinned_text
+        else:
+            label = rotating_text or '—'
+        self.indicator.set_label(label, '')
+
+        # Ícone vem APENAS do rotativo atual — items fixos contribuem só com
+        # texto, pra evitar conflito visual entre o ícone e o que está rolando.
+        if rotating_icon_pair:
+            icon_path, prov_name = rotating_icon_pair
+            self.indicator.set_icon_full(icon_path, prov_name)
+
+    def _tick_rotation(self):
+        _, rotating = self._split_items()
+        if len(rotating) > 1:
+            self._rotation_index = (self._rotation_index + 1) % len(rotating)
+        else:
+            self._rotation_index = 0
+        # sempre re-renderiza pra refletir mudanças derivadas do tempo
+        # (ex.: minuto do jogo avançando entre fetches)
+        self._render_bar()
+        return True
+
+    def _rebuild_menu(self):
+        for child in self.menu.get_children():
+            self.menu.remove(child)
+
+        appended_any = False
+        for provider in self.providers:
+            result = self.results[provider.name]
+            header = provider.menu_header(result)
+            if not header:
+                continue  # provider idle — não entra no menu
+            details = provider.render_menu(result)
+            item = Gtk.MenuItem(label=header)
+            if details:
+                sub = Gtk.Menu()
+                for d in details:
+                    sub.append(d)
+                item.set_submenu(sub)
+            else:
+                item.set_sensitive(False)
+            self.menu.append(item)
+            appended_any = True
+
+        if appended_any:
+            self.menu.append(Gtk.SeparatorMenuItem())
+
+        configure = Gtk.MenuItem(label='Configurar…')
+        configure.connect('activate', self._on_configure)
+        self.menu.append(configure)
 
         refresh = Gtk.MenuItem(label='Atualizar agora')
         refresh.connect('activate', self._on_refresh)
@@ -81,127 +173,42 @@ class ClaudeIndicator:
 
         self.menu.show_all()
 
-    def _fetch_oauth(self):
-        token = get_oauth_token()
-        r = requests.get(
-            cfg.OAUTH_USAGE_URL,
-            headers={**cfg.OAUTH_HEADERS, 'Authorization': f'Bearer {token}'},
-            impersonate='firefox133',
-            timeout=10,
-        )
-        if r.status_code in (401, 403):
-            raise TokenExpired(f'auth rejeitada (HTTP {r.status_code}) — rode `claude` para renovar')
-        r.raise_for_status()
-        return r.json()
-
-    def _fetch_cookies(self):
-        cookies = get_claude_cookies()
-        org_id = cookies.get('lastActiveOrg')
-        r = requests.get(
-            f'https://claude.ai/api/organizations/{org_id}/usage',
-            headers=cfg.HEADERS,
-            cookies=cookies,
-            impersonate='firefox133',
-            timeout=10,
-        )
-        if r.status_code == 403 and 'Just a moment' in r.text:
-            raise RuntimeError('bloqueado pelo Cloudflare — abra claude.ai no Firefox')
-        r.raise_for_status()
-        return r.json()
-
-    def _fetch(self):
-        oauth_err = None
-        try:
-            return self._fetch_oauth(), None
-        except (TokenMissing, TokenExpired) as exc:
-            oauth_err = str(exc)
-        except Exception as exc:
-            oauth_err = f'oauth: {exc}'
-
-        try:
-            return self._fetch_cookies(), None
-        except Exception as exc:
-            return None, f'{oauth_err}; cookies: {exc}'
-
-    def _fetch_loop(self):
-        while True:
-            data, err = self._fetch()
-            GLib.idle_add(self._update_ui, data, err)
-            time.sleep(REFRESH_INTERVAL)
-
     def _on_refresh(self, _item):
-        GLib.idle_add(self.item_status.set_label, 'atualizando…')
-        threading.Thread(target=self._refresh_once, daemon=True).start()
+        for provider in self.providers:
+            threading.Thread(
+                target=self._refresh_once,
+                args=(provider,),
+                daemon=True,
+            ).start()
 
-    def _refresh_once(self):
-        data, err = self._fetch()
-        GLib.idle_add(self._update_ui, data, err)
+    def _refresh_once(self, provider: Provider):
+        try:
+            result = provider.fetch()
+        except Exception as exc:
+            result = ProviderResult(error=f'fetch crashed: {exc}')
+        GLib.idle_add(self._on_provider_update, provider.name, result)
+
+    def _on_configure(self, _item):
+        if self._config_window and self._config_window.is_visible():
+            self._config_window.present()
+            return
+        self._config_window = ConfigDialog(on_save=self._on_config_saved)
+        self._config_window.show_all()
+
+    def _on_config_saved(self):
+        # config foi gravada — força refresh imediato em todos os providers
+        # pra UI refletir a nova configuração
+        self._on_refresh(None)
 
     def _on_quit(self, _item):
         Gtk.main_quit()
 
-    def _update_ui(self, data, err):
-        if err or not data:
-            msg = (err or 'sem dados')[:40]
-            self.indicator.set_label('Claude: erro', '')
-            self.item_status.set_label(f'erro: {msg}')
-            return False
-
-        five_h = data.get('five_hour') or {}
-        seven_d = data.get('seven_day') or {}
-        extra = data.get('extra_usage') or {}
-
-        pct_5h = five_h.get('utilization') or 0
-        pct_7d = seven_d.get('utilization') or 0
-
-        extra_enabled = bool(extra and extra.get('is_enabled'))
-        pct_extra = (extra.get('utilization') or 0) if extra_enabled else 0
-        if extra_enabled:
-            used = (extra.get('used_credits') or 0) / 100
-            limit = (extra.get('monthly_limit') or 0) / 100
-            currency = extra.get('currency') or ''
-            symbol = '$' if currency == 'USD' else ''
-            sep = ' ' if symbol else ''
-            extra_label_bar = f'{symbol}{sep}{_fmt_credits(used)}/{_fmt_credits(limit)}'
-            extra_label_menu = f'extra: {symbol}{sep}{used:,.2f} / {limit:,.2f} ({pct_extra:.1f}%)'
-        else:
-            extra_label_bar = ''
-            extra_label_menu = 'extra: desabilitado'
-
-        parts = []
-        if pct_5h > 0:
-            parts.append(f'5h:{pct_5h:.0f}%')
-        if pct_7d > 0:
-            parts.append(f'7d:{pct_7d:.0f}%')
-        if pct_extra > 0:
-            parts.append(extra_label_bar)
-        bar_label = ' '.join(parts) if parts else 'Claude: idle'
-        self.indicator.set_label(bar_label, '')
-
-        self.item_5h.set_label(self._detail_label('5h', five_h))
-        self.item_7d.set_label(self._detail_label('7d', seven_d))
-        self.item_extra.set_label(extra_label_menu)
-
-        resets_at = five_h.get('resets_at') or seven_d.get('resets_at')
-        if resets_at:
-            dt = datetime.fromisoformat(resets_at.replace('Z', '+00:00'))
-            local = dt.astimezone()
-            self.item_reset.set_label(f"reset: {local.strftime('%d/%m %H:%M')}")
-        else:
-            self.item_reset.set_label('reset: –')
-
-        self.item_status.set_label(f"atualizado {datetime.now().strftime('%H:%M')}")
-        return False
-
-    def _detail_label(self, prefix, window):
-        pct = window.get('utilization') or 0
-        used = window.get('used_credits')
-        limit = window.get('credit_limit')
-        if used is not None and limit:
-            return f'{prefix}: {pct:.1f}% ({_fmt_credits(used)}/{_fmt_credits(limit)})'
-        return f'{prefix}: {pct:.1f}%'
-
 
 if __name__ == '__main__':
-    ClaudeIndicator()
+    MultiProviderIndicator([
+        ClaudeUsageProvider(),
+        FootballProvider(),
+        MoonProvider(),
+        WeatherProvider(),
+    ])
     Gtk.main()
