@@ -57,6 +57,15 @@ def _download_team_logo(team_id: int) -> str | None:
         return None
 
 
+def _event_logos(event: dict) -> tuple[str | None, str | None]:
+    """(escudo da casa, escudo do visitante) de um jogo — baixados/cacheados."""
+    home_id = (event.get('homeTeam') or {}).get('id')
+    away_id = (event.get('awayTeam') or {}).get('id')
+    home = _download_team_logo(home_id) if home_id else None
+    away = _download_team_logo(away_id) if away_id else None
+    return home, away
+
+
 def _team_name(team: dict) -> str:
     return team.get('shortName') or team.get('name') or '?'
 
@@ -89,6 +98,12 @@ def _tournament(event: dict) -> str:
 def _with_tournament(label: str, event: dict) -> str:
     tour = _tournament(event)
     return f'{label} · {tour}' if tour else label
+
+
+# Nota: o nome do torneio NÃO entra no `label_tail` (pílula do Windows) de
+# propósito — quem fixa um torneio já sabe qual é, e repeti-lo em cada jogo
+# alargava demais a janela. Ele continua no `label` completo (GTK/bandeja) e
+# no menu de detalhes.
 
 
 def _format_team_match(team_id: int, event: dict) -> str:
@@ -124,8 +139,21 @@ def _format_team_match(team_id: int, event: dict) -> str:
     return _with_tournament(f'vs {opp_name}', event)
 
 
+def _upcoming_parts(event: dict) -> tuple[str, str]:
+    """(core, tail) de um jogo que ainda não começou (modo torneio).
+
+    core = `Casa x Fora` (escudo do visitante vai logo após); tail = horário +
+    torneio.
+    """
+    home = _team_name(event.get('homeTeam') or {})
+    away = _team_name(event.get('awayTeam') or {})
+    start = event.get('startTimestamp')
+    when = _format_when(start) if start else ''
+    return f'{home} x {away}', when
+
+
 def _format_upcoming_event(event: dict) -> str:
-    """Label de um jogo que ainda não começou (modo torneio)."""
+    """Label COMPLETO — usado por frontends de um ícone só (GTK/bandeja)."""
     home = _team_name(event.get('homeTeam') or {})
     away = _team_name(event.get('awayTeam') or {})
     start = event.get('startTimestamp')
@@ -142,8 +170,27 @@ def _event_tournament_id(event: dict):
     return ut.get('id') or t.get('id')
 
 
+def _live_parts(event: dict) -> tuple[str, str]:
+    """(core, tail) de um jogo ao vivo.
+
+    core = `Casa 1x0 Fora` (escudo do visitante vai logo após `Fora`);
+    tail = minuto/status + torneio.
+    """
+    home = _team_name(event.get('homeTeam') or {})
+    away = _team_name(event.get('awayTeam') or {})
+    hs = (event.get('homeScore') or {}).get('current') or 0
+    as_ = (event.get('awayScore') or {}).get('current') or 0
+    desc = (event.get('status') or {}).get('description') or ''
+    if desc.lower() == 'halftime':
+        tag = 'HT'
+    else:
+        minute = _live_minute(event)
+        tag = f"{minute}'" if minute is not None else desc
+    return f'{home} {hs}x{as_} {away}', tag
+
+
 def _format_live_event(event: dict) -> str:
-    """Label genérico pra jogo ao vivo no feed global."""
+    """Label genérico pra jogo ao vivo no feed global (texto COMPLETO)."""
     home = _team_name(event.get('homeTeam') or {})
     away = _team_name(event.get('awayTeam') or {})
     hs = (event.get('homeScore') or {}).get('current') or 0
@@ -298,48 +345,46 @@ class FootballProvider(Provider):
             return REFRESH_PREGAME_SOON
         return REFRESH_IDLE
 
+    @staticmethod
+    def _live_bar_item(event: dict) -> BarItem:
+        """BarItem de um jogo ao vivo, com escudo da casa à esq. e do
+        visitante flanqueando o placar (`🛡️ Casa 1x0 Fora 🛡️ 67' · Torneio`)."""
+        home_icon, away_icon = _event_logos(event)
+        core, tail = _live_parts(event)
+        return BarItem(
+            label=_format_live_event(event),
+            icon_path=home_icon, icon_right_path=away_icon,
+            label_core=core, label_tail=tail, pin_id=None,
+        )
+
+    @staticmethod
+    def _upcoming_bar_item(event: dict) -> BarItem:
+        """BarItem de um jogo futuro (`🛡️ Casa x Fora 🛡️ horário · Torneio`)."""
+        home_icon, away_icon = _event_logos(event)
+        core, tail = _upcoming_parts(event)
+        return BarItem(
+            label=_format_upcoming_event(event),
+            icon_path=home_icon, icon_right_path=away_icon,
+            label_core=core, label_tail=tail, pin_id=None,
+        )
+
     def items(self, result: ProviderResult) -> list[BarItem]:
         if result.error or not result.data:
             return []
 
         if result.data.get('mode') == 'live':
+            # itens do feed global não são fixáveis (lista grande, dinâmica)
             events = result.data.get('events') or []
-            out = []
-            for event in events:
-                home_id = (event.get('homeTeam') or {}).get('id')
-                icon = _download_team_logo(home_id) if home_id else None
-                # itens do feed global não são fixáveis (lista grande, dinâmica)
-                out.append(BarItem(
-                    label=_format_live_event(event),
-                    icon_path=icon,
-                    pin_id=None,
-                ))
-            return out
+            return [self._live_bar_item(event) for event in events]
 
         if result.data.get('mode') == 'tournaments':
             live = result.data.get('live') or []
             if live:
                 # ao vivo: rotaciona todos os jogos rolando agora
-                out = []
-                for event in live:
-                    home_id = (event.get('homeTeam') or {}).get('id')
-                    icon = _download_team_logo(home_id) if home_id else None
-                    out.append(BarItem(
-                        label=_format_live_event(event),
-                        icon_path=icon, pin_id=None,
-                    ))
-                return out
+                return [self._live_bar_item(event) for event in live]
             # nada ao vivo: mostra os próximos jogos (cap 3 pra não poluir)
             upcoming = result.data.get('upcoming') or []
-            out = []
-            for event in upcoming[:3]:
-                home_id = (event.get('homeTeam') or {}).get('id')
-                icon = _download_team_logo(home_id) if home_id else None
-                out.append(BarItem(
-                    label=_format_upcoming_event(event),
-                    icon_path=icon, pin_id=None,
-                ))
-            return out
+            return [self._upcoming_bar_item(event) for event in upcoming[:3]]
 
         # mode == 'teams'
         team_events = result.data.get('team_events') or {}

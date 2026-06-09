@@ -27,10 +27,23 @@ class BarItem:
 
     `pin_id` identifica o item pra fins de fixação na barra (config `pinned`).
     `None` significa que o item não é fixável (ex.: jogos do feed ao vivo).
+
+    `icon_right_path` é um ícone OPCIONAL exibido à direita do texto (ex.: escudo
+    do visitante num jogo). Frontends que só suportam um ícone (AppIndicator do
+    GTK) ignoram esse campo e usam apenas `label` + `icon_path`.
+
+    Pra flanquear o escudo do visitante exatamente após o nome dele, o item pode
+    partir o texto em `label_core` (antes do escudo da direita) e `label_tail`
+    (depois): `🛡️ {label_core} 🛡️ {label_tail}`. Quando ausentes, frontends com
+    dois ícones caem no `label` inteiro. `label` continua sendo o texto COMPLETO
+    (core + tail) — é o que GTK/bandeja consomem, então nada muda pra eles.
     """
     label: str
     icon_path: str | None = None
     pin_id: str | None = None
+    icon_right_path: str | None = None
+    label_core: str | None = None
+    label_tail: str | None = None
 
 
 class Provider:
