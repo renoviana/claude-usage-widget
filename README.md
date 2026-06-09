@@ -1,7 +1,12 @@
 # Claude Usage Widget
 
-AppIndicator para a barra do topo do GNOME/Ubuntu que exibe o consumo do
-[claude.ai](https://claude.ai) em tempo real (janela de 5h, 7d e créditos extras).
+Widget de barra que exibe o consumo do [claude.ai](https://claude.ai) em tempo
+real (janela de 5h, 7d e créditos extras), além de providers opcionais de
+futebol (placares ao vivo via Sofascore), clima (Open-Meteo) e próxima lua cheia.
+
+Roda em **Linux** (AppIndicator na barra do topo do GNOME) e em **Windows/macOS**
+(mini-janela flutuante always-on-top, ou ícone na bandeja). O mesmo entry point
+(`claude_widget.py`) escolhe o frontend conforme o sistema.
 
 <img width="431" height="28" alt="image" src="https://github.com/user-attachments/assets/785d460b-b1c5-407d-8bd0-5dffbf752220" />
 
@@ -40,6 +45,41 @@ Para rodar agora sem reiniciar a sessão:
 ```bash
 /usr/bin/python3 ~/.local/share/claude-widget/claude_widget.py &
 ```
+
+## Windows
+
+O Windows 11 não permite colocar texto fixo na barra de tarefas (a área do
+relógio é do sistema e os "Deskbands" foram removidos). Então, por padrão, o
+widget aparece como uma **mini-janela flutuante** sempre por cima, mostrando um
+item por vez e rotacionando a cada 10s — o mais próximo de algo "fixo igual ao
+relógio".
+
+- **arraste** com o botão esquerdo pra reposicionar (a posição é salva);
+- **clique direito** abre o menu (Atualizar / Configurar / Sair).
+
+```powershell
+git clone https://github.com/SEU-USUARIO/claude-widget.git
+cd claude-widget
+python -m pip install -r requirements.txt
+# rodar sem janela de console (recomendado):
+pythonw claude_widget.py
+```
+
+**Modo bandeja (alternativa):** se preferir um ícone discreto na bandeja (com os
+detalhes no tooltip e no menu) em vez da janela flutuante, mude `"frontend"` para
+`"tray"` no `config.json`.
+
+Autenticação: o widget usa primeiro o token OAuth do Claude Code
+(`%USERPROFILE%\.claude\.credentials.json`) e, se faltar, cai nos cookies do
+`claude.ai` no Firefox. Se preferir Chrome/outro navegador, crie
+`%USERPROFILE%\.config\claude-widget\cookies.json` (mesmo formato da seção abaixo).
+
+**Iniciar no login:** crie um atalho para `pythonw claude_widget.py` na pasta
+`shell:startup` (Win+R → `shell:startup`).
+
+**Configuração:** a janela gráfica de configuração (times, cidade, lua, fixar na
+barra) é **só no Linux**. No Windows, use o menu **"Configurar (abrir JSON)…"**,
+que abre `%USERPROFILE%\.config\claude-widget\config.json` no editor padrão.
 
 ## Configurando os cookies
 

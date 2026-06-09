@@ -3,16 +3,12 @@ import os
 import time
 from datetime import datetime, timezone
 
-import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
-
 from curl_cffi import requests
 
 import widget_settings
 
 from . import _format
-from .base import BarItem, Provider, ProviderResult
+from .base import BarItem, MENU_SEPARATOR, Provider, ProviderResult
 
 
 SOFASCORE_BASE = 'https://api.sofascore.com/api/v1'
@@ -128,6 +124,24 @@ def _format_team_match(team_id: int, event: dict) -> str:
     return _with_tournament(f'vs {opp_name}', event)
 
 
+def _format_upcoming_event(event: dict) -> str:
+    """Label de um jogo que ainda não começou (modo torneio)."""
+    home = _team_name(event.get('homeTeam') or {})
+    away = _team_name(event.get('awayTeam') or {})
+    start = event.get('startTimestamp')
+    when = _format_when(start) if start else ''
+    label = f'{home} x {away}'
+    if when:
+        label = f'{label} {when}'
+    return _with_tournament(label, event)
+
+
+def _event_tournament_id(event: dict):
+    t = event.get('tournament') or {}
+    ut = t.get('uniqueTournament') or {}
+    return ut.get('id') or t.get('id')
+
+
 def _format_live_event(event: dict) -> str:
     """Label genérico pra jogo ao vivo no feed global."""
     home = _team_name(event.get('homeTeam') or {})
@@ -189,20 +203,59 @@ class FootballProvider(Provider):
         except Exception:
             return []
 
+    def _tournament_upcoming(self, tournament_id, season_id) -> list[dict]:
+        """Próximos jogos de um torneio/temporada (events/next/0)."""
+        if not tournament_id or not season_id:
+            return []
+        try:
+            r = requests.get(
+                f'{SOFASCORE_BASE}/unique-tournament/{tournament_id}'
+                f'/season/{season_id}/events/next/0',
+                impersonate='firefox133',
+                timeout=10,
+            )
+            r.raise_for_status()
+            return r.json().get('events') or []
+        except Exception:
+            return []
+
     def fetch(self) -> ProviderResult:
         self._config = self._load_config()
         teams = self._config.get('teams') or []
+        tournaments = self._config.get('tournaments') or []
         live_on = bool(self._config.get('live_matches'))
 
         # Sem nada configurado → fica inativo
-        if not teams and not live_on:
+        if not teams and not tournaments and not live_on:
             self._next_refresh = REFRESH_IDLE
             return ProviderResult()
 
+        # Prioridade: feed global ao vivo > torneios > times monitorados
         if live_on:
             events = self._live_events()
             self._next_refresh = REFRESH_LIVE if events else REFRESH_IDLE
             return ProviderResult(data={'mode': 'live', 'events': events})
+
+        if tournaments:
+            tids = {t['id'] for t in tournaments if t.get('id') is not None}
+            live = [
+                e for e in self._live_events()
+                if _event_tournament_id(e) in tids
+            ]
+            upcoming = []
+            for t in tournaments:
+                upcoming.extend(
+                    self._tournament_upcoming(t.get('id'), t.get('season'))
+                )
+            upcoming = [
+                e for e in upcoming
+                if (e.get('status') or {}).get('type') == 'notstarted'
+            ]
+            upcoming.sort(key=lambda e: e.get('startTimestamp') or 0)
+            self._next_refresh = self._compute_tournament_refresh(live, upcoming)
+            return ProviderResult(
+                data={'mode': 'tournaments', 'live': live, 'upcoming': upcoming}
+            )
 
         team_events = {}
         for team in teams:
@@ -212,6 +265,18 @@ class FootballProvider(Provider):
 
     def next_refresh_seconds(self) -> int:
         return self._next_refresh
+
+    def _compute_tournament_refresh(self, live: list, upcoming: list) -> int:
+        if live:
+            return REFRESH_LIVE
+        # upcoming já vem ordenado por horário; basta olhar o mais próximo
+        for event in upcoming:
+            delta = (event.get('startTimestamp') or 0) - time.time()
+            if 0 < delta < self.PREGAME_SOON_WINDOW:
+                return REFRESH_PREGAME_SOON
+            if delta > 0:
+                break
+        return REFRESH_IDLE
 
     def _compute_idle_refresh(self, team_events: dict) -> int:
         any_live = False
@@ -251,6 +316,31 @@ class FootballProvider(Provider):
                 ))
             return out
 
+        if result.data.get('mode') == 'tournaments':
+            live = result.data.get('live') or []
+            if live:
+                # ao vivo: rotaciona todos os jogos rolando agora
+                out = []
+                for event in live:
+                    home_id = (event.get('homeTeam') or {}).get('id')
+                    icon = _download_team_logo(home_id) if home_id else None
+                    out.append(BarItem(
+                        label=_format_live_event(event),
+                        icon_path=icon, pin_id=None,
+                    ))
+                return out
+            # nada ao vivo: mostra os próximos jogos (cap 3 pra não poluir)
+            upcoming = result.data.get('upcoming') or []
+            out = []
+            for event in upcoming[:3]:
+                home_id = (event.get('homeTeam') or {}).get('id')
+                icon = _download_team_logo(home_id) if home_id else None
+                out.append(BarItem(
+                    label=_format_upcoming_event(event),
+                    icon_path=icon, pin_id=None,
+                ))
+            return out
+
         # mode == 'teams'
         team_events = result.data.get('team_events') or {}
         teams = self._config.get('teams') or []
@@ -278,6 +368,16 @@ class FootballProvider(Provider):
         if data.get('mode') == 'live':
             live_events = data.get('events') or []
             return f'Jogos ao vivo · {len(live_events)}'
+        if data.get('mode') == 'tournaments':
+            tournaments = self._config.get('tournaments') or []
+            names = ', '.join(t.get('name') or '?' for t in tournaments) or 'Torneios'
+            live = data.get('live') or []
+            upcoming = data.get('upcoming') or []
+            if live:
+                return f'{names} · {len(live)} ao vivo'
+            if upcoming:
+                return f'{names} · próx. {len(upcoming)}'
+            return f'{names} · sem jogos'
         teams = self._config.get('teams') or []
         if not teams:
             return None
@@ -289,8 +389,7 @@ class FootballProvider(Provider):
         items = []
 
         if result.error:
-            items.append(self._sensitive_item(f'erro: {result.error[:60]}'))
-            return items
+            return [f'erro: {result.error[:60]}']
 
         data = result.data or {}
 
@@ -305,9 +404,34 @@ class FootballProvider(Provider):
                 tag = f"{minute}'" if minute is not None else (
                     (event.get('status') or {}).get('description') or ''
                 )
-                items.append(self._sensitive_item(f'{home} {hs}x{as_} {away}  ({tag})'))
+                items.append(f'{home} {hs}x{as_} {away}  ({tag})')
             if len(live_events) > 15:
-                items.append(self._sensitive_item(f'… e mais {len(live_events) - 15}'))
+                items.append(f'… e mais {len(live_events) - 15}')
+            return items
+
+        if data.get('mode') == 'tournaments':
+            live = data.get('live') or []
+            upcoming = data.get('upcoming') or []
+            for event in live[:15]:
+                home = _team_name(event.get('homeTeam') or {})
+                away = _team_name(event.get('awayTeam') or {})
+                hs = (event.get('homeScore') or {}).get('current') or 0
+                as_ = (event.get('awayScore') or {}).get('current') or 0
+                minute = _live_minute(event)
+                tag = f"{minute}'" if minute is not None else (
+                    (event.get('status') or {}).get('description') or ''
+                )
+                items.append(f'{home} {hs}x{as_} {away}  ({tag})')
+            if live and upcoming:
+                items.append(MENU_SEPARATOR)
+            for event in upcoming[:10]:
+                home = _team_name(event.get('homeTeam') or {})
+                away = _team_name(event.get('awayTeam') or {})
+                start = event.get('startTimestamp')
+                when = _format_when(start) if start else '?'
+                items.append(f'{home} x {away}  ({when})')
+            if not items:
+                items.append('sem jogos próximos')
             return items
 
         # mode == 'teams'
@@ -319,15 +443,12 @@ class FootballProvider(Provider):
         for team in teams:
             event = team_events.get(team['id'])
             if not event:
-                items.append(self._sensitive_item(
-                    f"{team['name']}: sem jogos próximos"
-                ))
+                items.append(f"{team['name']}: sem jogos próximos")
                 continue
-            line = self._format_team_line(team['id'], event)
-            items.append(self._sensitive_item(line))
+            items.append(self._format_team_line(team['id'], event))
             tournament = (event.get('tournament') or {}).get('name')
             if tournament:
-                items.append(self._sensitive_item(f'   ↳ {tournament}'))
+                items.append(f'   ↳ {tournament}')
 
         return items
 
@@ -351,9 +472,3 @@ class FootballProvider(Provider):
         start = event.get('startTimestamp')
         when = _format_when(start) if start else '?'
         return f'{home_full} x {away_full}  ({when})'
-
-    @staticmethod
-    def _sensitive_item(label):
-        item = Gtk.MenuItem(label=label)
-        item.set_sensitive(False)
-        return item

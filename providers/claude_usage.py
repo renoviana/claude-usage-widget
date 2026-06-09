@@ -1,17 +1,13 @@
 import os
 from datetime import datetime
 
-import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
-
 from curl_cffi import requests
 
 import claude_config as cfg
 from claude_auth import get_oauth_token, get_credentials_path, TokenMissing, TokenExpired
 from claude_cookies import get_claude_cookies, cookies_available
 
-from .base import BarItem, Provider, ProviderResult
+from .base import BarItem, MENU_SEPARATOR, Provider, ProviderResult
 
 
 _ICON_PATH = os.path.join(
@@ -149,40 +145,30 @@ class ClaudeUsageProvider(Provider):
         if not self._is_available():
             return []
 
-        items = []
-
         if result.error or not result.data:
             msg = (result.error or 'sem dados')[:60]
-            items.append(self._sensitive_item(f'erro: {msg}'))
-            return items
+            return [f'erro: {msg}']
 
         v = self._extract(result.data)
 
-        items.append(self._sensitive_item(self._detail_label('5h', v['five_h'])))
-        items.append(self._sensitive_item(self._detail_label('7d', v['seven_d'])))
-        items.append(self._sensitive_item(v['extra_menu']))
-
-        items.append(Gtk.SeparatorMenuItem())
+        items = [
+            self._detail_label('5h', v['five_h']),
+            self._detail_label('7d', v['seven_d']),
+            v['extra_menu'],
+            MENU_SEPARATOR,
+        ]
 
         resets_at = v['five_h'].get('resets_at') or v['seven_d'].get('resets_at')
         if resets_at:
             dt = datetime.fromisoformat(resets_at.replace('Z', '+00:00'))
             local = dt.astimezone()
-            items.append(self._sensitive_item(f"reset: {local.strftime('%d/%m %H:%M')}"))
+            items.append(f"reset: {local.strftime('%d/%m %H:%M')}")
         else:
-            items.append(self._sensitive_item('reset: –'))
+            items.append('reset: –')
 
-        items.append(self._sensitive_item(
-            f"atualizado {datetime.now().strftime('%H:%M')}"
-        ))
+        items.append(f"atualizado {datetime.now().strftime('%H:%M')}")
 
         return items
-
-    @staticmethod
-    def _sensitive_item(label):
-        item = Gtk.MenuItem(label=label)
-        item.set_sensitive(False)
-        return item
 
     @staticmethod
     def _detail_label(prefix, window):

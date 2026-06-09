@@ -1,9 +1,5 @@
 from datetime import datetime
 
-import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
-
 from curl_cffi import requests
 
 import widget_settings
@@ -128,9 +124,7 @@ class WeatherProvider(Provider):
 
     def render_menu(self, result: ProviderResult) -> list:
         if result.error:
-            i = Gtk.MenuItem(label=f'erro: {result.error[:60]}')
-            i.set_sensitive(False)
-            return [i]
+            return [f'erro: {result.error[:60]}']
 
         cur = self._current(result)
         if not cur:
@@ -142,25 +136,17 @@ class WeatherProvider(Provider):
 
         out = []
         if self._location_name:
-            i = Gtk.MenuItem(label=self._location_name)
-            i.set_sensitive(False)
-            out.append(i)
+            out.append(self._location_name)
         if humidity is not None:
-            i = Gtk.MenuItem(label=f'umidade {humidity}%')
-            i.set_sensitive(False)
-            out.append(i)
+            out.append(f'umidade {humidity}%')
         if wind is not None:
-            i = Gtk.MenuItem(label=f'vento {wind} km/h')
-            i.set_sensitive(False)
-            out.append(i)
+            out.append(f'vento {wind} km/h')
         if updated:
             try:
                 t = datetime.fromisoformat(updated)
                 upd_str = t.strftime('%H:%M')
             except Exception:
                 upd_str = updated
-            i = Gtk.MenuItem(label=f'atualizado {upd_str}')
-            i.set_sensitive(False)
-            out.append(i)
+            out.append(f'atualizado {upd_str}')
 
         return out

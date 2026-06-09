@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from typing import Any
 
+# Sentinela usada nas listas de `render_menu`: um item `None` vira um separador
+# no frontend (Gtk.SeparatorMenuItem / pystray.Menu.SEPARATOR).
+MENU_SEPARATOR = None
+
 
 @dataclass
 class ProviderResult:
@@ -60,10 +64,12 @@ class Provider:
         return None
 
     def render_menu(self, result: ProviderResult) -> list:
-        """Lista de Gtk.MenuItem que vai pro SUBMENU desse provider.
+        """Linhas de texto que vão pro SUBMENU desse provider.
 
-        Pode retornar lista vazia se não há detalhes (item top-level
-        sem submenu).
+        Retorna uma lista de `str` (linhas informativas, não-clicáveis) onde
+        um item `MENU_SEPARATOR` (None) representa um separador. Mantém os
+        providers agnósticos de toolkit — o frontend (GTK/tray) traduz cada
+        linha pro widget nativo. Lista vazia = item top-level sem submenu.
         """
         return []
 

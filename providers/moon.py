@@ -1,9 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
-
 import widget_settings
 
 from . import _format
@@ -79,6 +75,4 @@ class MoonProvider(Provider):
         local = self._local_full_moon(result)
         if not local:
             return []
-        item = Gtk.MenuItem(label=local.strftime('%d/%m %H:%M (local)'))
-        item.set_sensitive(False)
-        return [item]
+        return [local.strftime('%d/%m %H:%M (local)')]

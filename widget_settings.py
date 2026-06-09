@@ -4,12 +4,16 @@ import os
 CONFIG_PATH = os.path.expanduser('~/.config/claude-widget/config.json')
 
 DEFAULT_CONFIG = {
+    # Frontend no Windows/macOS: 'float' (mini-janela flutuante) ou 'tray'
+    # (ícone na bandeja). Ignorado no Linux (sempre AppIndicator GTK).
+    'frontend': 'float',
     'pinned': [],
     'claude': {
         'claude_dir': '~/.claude',
     },
     'football': {
         'teams': [],
+        'tournaments': [],
         'live_matches': False,
     },
     'weather': {
@@ -19,6 +23,12 @@ DEFAULT_CONFIG = {
     },
     'moon': {
         'enabled': False,
+    },
+    # Posição da mini-janela flutuante (frontend Windows). None = canto
+    # inferior direito no primeiro start.
+    'window': {
+        'x': None,
+        'y': None,
     },
 }
 
