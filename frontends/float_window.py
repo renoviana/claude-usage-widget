@@ -59,12 +59,10 @@ class FloatWindow:
         self._rotation_index = 0
         self._tick = 0
         self._icon_cache: dict[str, ImageTk.PhotoImage] = {}
-        self._drag_offset = (0, 0)
         # âncora do canto direito: a janela cresce/encolhe pra ESQUERDA quando
         # o texto muda, pra nunca vazar pra fora da borda direita da tela.
         self._right = 0
         self._top = 0
-        self._dragging = False
         # quando encaixada na barra (sem posição manual salva), guardamos a
         # faixa vertical da barra pra recentralizar o Y a cada ciclo — a altura
         # final da janela só é conhecida depois do primeiro render.
@@ -103,14 +101,12 @@ class FloatWindow:
         self.menu.add_separator()
         self.menu.add_command(label='Sair', command=self._on_quit)
 
-        drag_targets = (
+        # widget fixo: sem arrasto, apenas menu de contexto (botão direito)
+        click_targets = (
             self.root, self.container, self.icon_left, self.text_rot,
             self.icon_right, self.text_tail, self.icon_pinned, self.text_pinned,
         )
-        for widget in drag_targets:
-            widget.bind('<Button-1>', self._on_drag_start)
-            widget.bind('<B1-Motion>', self._on_drag_move)
-            widget.bind('<ButtonRelease-1>', self._on_drag_end)
+        for widget in click_targets:
             widget.bind('<Button-3>', self._on_right_click)
 
         self._place_initial()
@@ -188,19 +184,10 @@ class FloatWindow:
 
     def _place_initial(self):
         self.root.update_idletasks()
-        win = (widget_settings.load().get('window') or {})
-        x, y = win.get('x'), win.get('y')
         w = self.root.winfo_width()
         h = self.root.winfo_height()
 
-        if x is not None and y is not None:
-            # usuário já arrastou pra um lugar — respeita
-            self.root.geometry(f'+{int(x)}+{int(y)}')
-            self.root.update_idletasks()
-            self._right = int(x) + self.root.winfo_width()
-            self._top = int(y)
-            return
-
+        # widget fixo (sem arrasto): sempre encaixa na barra de tarefas.
         docked = self._taskbar_dock(w, h)
         if docked is not None:
             x, y = docked
@@ -218,18 +205,21 @@ class FloatWindow:
     def _reposition(self):
         """Mantém o canto direito fixo; cresce/encolhe pra esquerda. Faz clamp
         pra janela não sumir pelas bordas da tela."""
-        if self._dragging:
-            return
         self.root.update_idletasks()
         w = self.root.winfo_width()
         h = self.root.winfo_height()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        # encaixada: recentraliza o Y na faixa da barra usando a altura ATUAL
-        # (só conhecida após o render), senão fica baixa demais.
-        if self._docked and self._dock_band:
-            top, bottom = self._dock_band
-            self._top = top + ((bottom - top) - h) // 2
+        # re-detecta a barra a cada ciclo: no autostart a barra, a bandeja e até
+        # a resolução ainda não estão estáveis no login, então o primeiro
+        # encaixe pode jogar a pílula pro meio da tela. Reencaixar a cada poll
+        # faz ela se ajustar sozinha assim que o Windows termina de montar a
+        # área de trabalho. O Y já vem centralizado na faixa da barra usando a
+        # altura ATUAL da janela.
+        docked = self._taskbar_dock(w, h)
+        if docked is not None:
+            self._docked = True
+            self._top = docked[1]
         x = max(0, min(self._right - w, sw - w))
         y = max(0, min(self._top, sh - h))
         self.root.geometry(f'+{int(x)}+{int(y)}')
@@ -237,28 +227,7 @@ class FloatWindow:
         # sem roubar foco, pra não ser coberta pela barra
         self.root.lift()
 
-    def _save_position(self):
-        self.root.update_idletasks()
-        self._right = self.root.winfo_x() + self.root.winfo_width()
-        self._top = self.root.winfo_y()
-        cfg = widget_settings.load()
-        cfg['window'] = {'x': self.root.winfo_x(), 'y': self.root.winfo_y()}
-        widget_settings.save(cfg)
-
-    # ---------- arrastar ----------
-
-    def _on_drag_start(self, event):
-        self._dragging = True
-        self._drag_offset = (event.x_root - self.root.winfo_x(),
-                             event.y_root - self.root.winfo_y())
-
-    def _on_drag_move(self, event):
-        dx, dy = self._drag_offset
-        self.root.geometry(f'+{event.x_root - dx}+{event.y_root - dy}')
-
-    def _on_drag_end(self, _event):
-        self._dragging = False
-        self._save_position()
+    # ---------- menu ----------
 
     def _on_right_click(self, event):
         try:
