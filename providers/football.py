@@ -41,6 +41,7 @@ REFRESH_PREGAME_SOON = 120   # jogo começa em < 30 min
 REFRESH_IDLE = 600           # nada acontecendo
 
 PREGAME_SOON_WINDOW = 30 * 60  # 30 minutos
+SHOW_UPCOMING_WINDOW = 7 * 24 * 3600  # só mostra jogos futuros dentro de 1 semana
 
 _CACHE_DIR = os.path.expanduser('~/.cache/claude-widget')
 
@@ -119,6 +120,12 @@ def _format_when(epoch: float | None) -> str:
         return ''
     local = datetime.fromtimestamp(epoch, tz=timezone.utc).astimezone()
     return _format.format_when(local, include_time=True)
+
+
+def _is_today(epoch: float) -> bool:
+    local = datetime.fromtimestamp(epoch).astimezone()
+    today = datetime.now().astimezone().date()
+    return local.date() == today
 
 
 def _league_label(name: str | None) -> str:
@@ -321,15 +328,18 @@ class FootballProvider(Provider):
         data = _http_json(f'{TSDB_BASE}/eventsnext.php?id={tid}')
         events = (data or {}).get('events') or []
         ev = events[0] if events else None
-        # sem próximo jogo → mostra o último resultado
-        if ev is None:
-            data = _http_json(f'{TSDB_BASE}/eventslast.php?id={tid}')
-            results = (data or {}).get('results') or []
-            ev = results[0] if results else None
         if ev is None:
             return None
 
         m = _match_from_tsdb(ev, live_idx, pin_id=pin_id)
+        # jogo futuro a mais de 1 semana → não exibe
+        if m['state'] == 'upcoming' and m['start']:
+            if m['start'] - time.time() > SHOW_UPCOMING_WINDOW:
+                return None
+        # jogo encerrado: exibe só se foi hoje
+        if m['state'] == 'finished':
+            if not m['start'] or not _is_today(m['start']):
+                return None
         # fallback de escudo: usa o badge do time monitorado se o evento não trouxe
         team_badge = _download_badge(team.get('strBadge'))
         if _norm(m['home']) == _norm(team.get('strTeam') or name):
