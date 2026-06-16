@@ -2,3 +2,5 @@ curl_cffi>=0.7
 Pillow>=10.0
 # Frontend de bandeja (Windows/macOS). No Linux o frontend é o AppIndicator GTK.
 pystray>=0.19; sys_platform != "linux"
+# Notificações nativas (toast de gol). No Linux usa libnotify/notify-send.
+plyer>=2.1; sys_platform == "win32"
