@@ -422,13 +422,11 @@ class FootballProvider(Provider):
             return []
         club = result.data.get('club') or []
         wc = result.data.get('wc') or []
-        out = [_bar_item(m) for m in club]
         club_pairs = {_pair(m) for m in club}
-        for m in wc:
-            if _pair(m) in club_pairs:  # não duplica jogo de time monitorado
-                continue
-            out.append(_bar_item(m))
-        return out
+        all_matches = list(club) + [m for m in wc if _pair(m) not in club_pairs]
+        if any(m['state'] == 'live' for m in all_matches):
+            all_matches = [m for m in all_matches if m['state'] == 'live']
+        return [_bar_item(m) for m in all_matches]
 
     def menu_header(self, result: ProviderResult) -> str | None:
         if not result.data and not result.error:
