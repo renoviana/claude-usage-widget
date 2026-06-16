@@ -13,6 +13,7 @@ import time
 
 import widget_settings
 from providers import BarItem, Provider, ProviderResult
+from providers.notify import notify as _notify
 
 
 class WidgetCore:
@@ -58,6 +59,11 @@ class WidgetCore:
         except Exception as exc:
             result = ProviderResult(error=f'fetch crashed: {exc}')
         self.results[provider.name] = result
+        for notif in result.notifications:
+            title, body = notif[0], notif[1]
+            icon = notif[2] if len(notif) > 2 else None
+            sound = notif[3] if len(notif) > 3 else False
+            _notify(title, body, icon, sound=sound)
         if self._on_change:
             self._on_change(provider.name, result)
 

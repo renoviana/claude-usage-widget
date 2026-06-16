@@ -303,6 +303,7 @@ class FootballProvider(Provider):
     def __init__(self):
         self._next_refresh = REFRESH_IDLE
         self._config = self._load_config()
+        self._prev_scores: dict[frozenset, tuple[int, int]] = {}
 
     @staticmethod
     def _load_config() -> dict:
@@ -372,6 +373,37 @@ class FootballProvider(Provider):
         matches.sort(key=lambda x: x['start'] or 0)
         return matches
 
+    def _detect_goals(self, club: list[dict], wc: list[dict]) -> list[tuple]:
+        """Compara placar atual com o anterior e retorna (title, body, icon) por gol."""
+        out = []
+        current_keys: set = set()
+        seen: set = set()
+        for m in club + wc:
+            key = _pair(m)
+            if key in seen:
+                continue
+            seen.add(key)
+            current_keys.add(key)
+            if m['state'] != 'live':
+                continue
+            hs = m['hs'] if m['hs'] is not None else 0
+            as_ = m['as_'] if m['as_'] is not None else 0
+            prev = self._prev_scores.get(key)
+            if prev is not None:
+                prev_hs, prev_as = prev
+                minute = m.get('minute') or 'ao vivo'
+                score = f"{m['home']} {hs}x{as_} {m['away']}  ({minute})"
+                if hs > prev_hs:
+                    out.append((f"Gol! {m['home']}", score, m.get('home_badge'), True))
+                if as_ > prev_as:
+                    out.append((f"Gol! {m['away']}", score, m.get('away_badge'), True))
+            self._prev_scores[key] = (hs, as_)
+        # Remove partidas que saíram da lista (encerradas, canceladas…)
+        for k in list(self._prev_scores):
+            if k not in current_keys:
+                del self._prev_scores[k]
+        return out
+
     def fetch(self) -> ProviderResult:
         self._config = self._load_config()
         teams = self._config.get('teams') or []
@@ -397,8 +429,9 @@ class FootballProvider(Provider):
 
         wc = self._world_cup_today() if world_cup else []
 
+        notifs = self._detect_goals(club, wc)
         self._next_refresh = self._refresh_for(club + wc)
-        return ProviderResult(data={'club': club, 'wc': wc})
+        return ProviderResult(data={'club': club, 'wc': wc}, notifications=notifs)
 
     def next_refresh_seconds(self) -> int:
         return self._next_refresh

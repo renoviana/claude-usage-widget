@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # Sentinela usada nas listas de `render_menu`: um item `None` vira um separador
@@ -15,6 +15,7 @@ class ProviderResult:
     """
     data: Any = None
     error: str | None = None
+    notifications: list = field(default_factory=list)  # [(title, body, icon_path|None)]
 
 
 @dataclass
