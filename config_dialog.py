@@ -1,4 +1,5 @@
 import threading
+import unicodedata
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -8,8 +9,14 @@ from curl_cffi import requests
 
 import widget_settings
 
-SOFASCORE_BASE = 'https://api.sofascore.com/api/v1'
 OPEN_METEO_GEOCODING = 'https://geocoding-api.open-meteo.com/v1/search'
+
+
+def _team_pin_id(name: str) -> str:
+    """pin_id de um time, no mesmo formato do provider: football:team:<slug>."""
+    s = unicodedata.normalize('NFKD', name or '')
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    return 'football:team:' + ''.join(c for c in s.lower() if c.isalnum())
 
 
 class ConfigDialog(Gtk.Window):
@@ -22,7 +29,7 @@ class ConfigDialog(Gtk.Window):
         self._config = widget_settings.load()
         football_cfg = self._config.setdefault('football', {})
         self._teams: list[dict] = list(football_cfg.get('teams') or [])
-        self._live_matches: bool = bool(football_cfg.get('live_matches'))
+        self._world_cup: bool = bool(football_cfg.get('world_cup'))
         self._pinned: list[str] = list(self._config.get('pinned') or [])
 
         weather_cfg = self._config.setdefault('weather', {})
@@ -80,9 +87,9 @@ class ConfigDialog(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.pack_start(self._build_teams_section(), True, True, 0)
         box.pack_start(Gtk.Separator(), False, False, 4)
-        box.pack_start(self._build_search_section(), False, False, 0)
+        box.pack_start(self._build_add_team_section(), False, False, 0)
         box.pack_start(Gtk.Separator(), False, False, 4)
-        box.pack_start(self._build_live_toggle(), False, False, 0)
+        box.pack_start(self._build_world_cup_toggle(), False, False, 0)
         return box
 
     # ---------- Times monitorados ----------
@@ -112,21 +119,26 @@ class ConfigDialog(Gtk.Window):
             row.add(Gtk.Label(label='(nenhum time — use a busca abaixo)', xalign=0))
             self._teams_list.add(row)
         for team in self._teams:
+            name = team.get('name') if isinstance(team, dict) else team
             row = Gtk.ListBoxRow()
             hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            label = Gtk.Label(label=f"{team['name']}  ·  id {team['id']}", xalign=0)
+            label = Gtk.Label(label=name or '?', xalign=0)
             hbox.pack_start(label, True, True, 0)
             remove_btn = Gtk.Button(label='remover')
-            remove_btn.connect('clicked', self._on_remove_team, team['id'])
+            remove_btn.connect('clicked', self._on_remove_team, name)
             hbox.pack_end(remove_btn, False, False, 0)
             row.add(hbox)
             self._teams_list.add(row)
         self._teams_list.show_all()
 
-    def _on_remove_team(self, _btn, team_id):
-        self._teams = [t for t in self._teams if t.get('id') != team_id]
+    @staticmethod
+    def _team_name(team) -> str:
+        return (team.get('name') if isinstance(team, dict) else team) or ''
+
+    def _on_remove_team(self, _btn, name):
+        self._teams = [t for t in self._teams if self._team_name(t) != name]
         # remove pin desse time se estava marcado
-        pin_id = f'football:team:{team_id}'
+        pin_id = _team_pin_id(name)
         self._pinned = [p for p in self._pinned if p != pin_id]
         self._refresh_teams_list()
         self._refresh_pin_section()
@@ -352,7 +364,8 @@ class ConfigDialog(Gtk.Window):
             ('moon', 'Lua cheia (quando próxima)'),
         ]
         for team in self._teams:
-            out.append((f"football:team:{team['id']}", f"Time · {team['name']}"))
+            name = self._team_name(team)
+            out.append((_team_pin_id(name), f'Time · {name}'))
         return out
 
     def _build_pin_section(self) -> Gtk.Widget:
@@ -456,130 +469,50 @@ class ConfigDialog(Gtk.Window):
             self._pinned.append(pid)
         self._refresh_pin_section()
 
-    # ---------- Busca ----------
+    # ---------- Adicionar time ----------
 
-    def _build_search_section(self) -> Gtk.Widget:
+    def _build_add_team_section(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        label = Gtk.Label(label='Adicionar time (busca no Sofascore)', xalign=0)
-        box.pack_start(label, False, False, 0)
-
+        box.pack_start(
+            Gtk.Label(label='Adicionar time (por nome, resolvido na TheSportsDB)',
+                      xalign=0),
+            False, False, 0,
+        )
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._search_entry = Gtk.Entry()
-        self._search_entry.set_placeholder_text('Nome do time')
-        self._search_entry.connect('activate', self._on_search)
-        row.pack_start(self._search_entry, True, True, 0)
-        self._search_btn = Gtk.Button(label='Buscar')
-        self._search_btn.connect('clicked', self._on_search)
-        row.pack_end(self._search_btn, False, False, 0)
+        self._team_entry = Gtk.Entry()
+        self._team_entry.set_placeholder_text('Ex.: Avaí, Flamengo, Palmeiras')
+        self._team_entry.connect('activate', self._on_add_team_by_name)
+        row.pack_start(self._team_entry, True, True, 0)
+        add_btn = Gtk.Button(label='Adicionar')
+        add_btn.connect('clicked', self._on_add_team_by_name)
+        row.pack_end(add_btn, False, False, 0)
         box.pack_start(row, False, False, 0)
-
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scrolled.set_min_content_height(120)
-        self._results_list = Gtk.ListBox()
-        self._results_list.set_selection_mode(Gtk.SelectionMode.NONE)
-        scrolled.add(self._results_list)
-        box.pack_start(scrolled, True, True, 0)
         return box
 
-    def _on_search(self, *_args):
-        query = (self._search_entry.get_text() or '').strip()
-        if not query:
+    def _on_add_team_by_name(self, *_args):
+        name = (self._team_entry.get_text() or '').strip()
+        if not name:
             return
-        self._search_btn.set_sensitive(False)
-        self._set_results_message('buscando…')
-        threading.Thread(
-            target=self._do_search, args=(query,), daemon=True,
-        ).start()
-
-    def _do_search(self, query: str):
-        try:
-            r = requests.get(
-                f'{SOFASCORE_BASE}/search/all',
-                params={'q': query, 'page': 0},
-                impersonate='firefox133',
-                timeout=10,
-            )
-            r.raise_for_status()
-            results = r.json().get('results') or []
-        except Exception as exc:
-            GLib.idle_add(self._on_search_error, str(exc))
+        if any(self._team_name(t).lower() == name.lower() for t in self._teams):
+            self._team_entry.set_text('')
             return
-        teams = []
-        for item in results:
-            if item.get('type') != 'team':
-                continue
-            entity = item.get('entity') or {}
-            sport = ((entity.get('sport') or {}).get('name') or '').lower()
-            if sport != 'football':
-                continue
-            teams.append(entity)
-            if len(teams) >= 12:
-                break
-        GLib.idle_add(self._on_search_results, teams)
-
-    def _on_search_error(self, msg: str):
-        self._search_btn.set_sensitive(True)
-        self._set_results_message(f'erro: {msg[:60]}')
-        return False
-
-    def _on_search_results(self, teams: list[dict]):
-        self._search_btn.set_sensitive(True)
-        for child in self._results_list.get_children():
-            self._results_list.remove(child)
-        if not teams:
-            self._set_results_message('nenhum time encontrado')
-            return False
-        existing_ids = {t.get('id') for t in self._teams}
-        for entity in teams:
-            row = Gtk.ListBoxRow()
-            hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            country = ((entity.get('country') or {}).get('name')) or ''
-            text = entity.get('name') or '?'
-            if country:
-                text = f'{text}  ·  {country}'
-            hbox.pack_start(Gtk.Label(label=text, xalign=0), True, True, 0)
-            if entity.get('id') in existing_ids:
-                hbox.pack_end(Gtk.Label(label='(já adicionado)', xalign=1), False, False, 0)
-            else:
-                add_btn = Gtk.Button(label='+')
-                add_btn.connect('clicked', self._on_add_team, entity)
-                hbox.pack_end(add_btn, False, False, 0)
-            row.add(hbox)
-            self._results_list.add(row)
-        self._results_list.show_all()
-        return False
-
-    def _set_results_message(self, msg: str):
-        for child in self._results_list.get_children():
-            self._results_list.remove(child)
-        row = Gtk.ListBoxRow()
-        row.add(Gtk.Label(label=msg, xalign=0))
-        self._results_list.add(row)
-        self._results_list.show_all()
-
-    def _on_add_team(self, _btn, entity):
-        team_id = entity.get('id')
-        if any(t.get('id') == team_id for t in self._teams):
-            return
-        self._teams.append({'id': team_id, 'name': entity.get('name') or '?'})
+        self._teams.append({'name': name})
+        self._team_entry.set_text('')
         self._refresh_teams_list()
         self._refresh_pin_section()
-        # re-renderiza resultados pra esconder o botão "+"
-        self._on_search_results([])
 
-    # ---------- Toggle ao vivo ----------
+    # ---------- Toggle Copa do Mundo ----------
 
-    def _build_live_toggle(self) -> Gtk.Widget:
+    def _build_world_cup_toggle(self) -> Gtk.Widget:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         label = Gtk.Label(
-            label='Acompanhar todos os jogos ao vivo (substitui os times)',
+            label='Mostrar jogos da Copa do Mundo de hoje (junto com os times)',
             xalign=0,
         )
         row.pack_start(label, True, True, 0)
-        self._live_switch = Gtk.Switch()
-        self._live_switch.set_active(self._live_matches)
-        row.pack_end(self._live_switch, False, False, 0)
+        self._world_cup_switch = Gtk.Switch()
+        self._world_cup_switch.set_active(self._world_cup)
+        row.pack_end(self._world_cup_switch, False, False, 0)
         return row
 
     # ---------- Ações ----------
@@ -597,7 +530,7 @@ class ConfigDialog(Gtk.Window):
     def _on_save_clicked(self, _btn):
         self._config.setdefault('football', {})
         self._config['football']['teams'] = self._teams
-        self._config['football']['live_matches'] = self._live_switch.get_active()
+        self._config['football']['world_cup'] = self._world_cup_switch.get_active()
         self._config['weather'] = self._weather
         self._config['moon'] = {'enabled': self._moon_switch.get_active()}
         self._config['pinned'] = list(self._pinned)  # preserva ordem do usuário

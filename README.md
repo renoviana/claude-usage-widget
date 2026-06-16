@@ -2,7 +2,8 @@
 
 Widget de barra que exibe o consumo do [claude.ai](https://claude.ai) em tempo
 real (janela de 5h, 7d e créditos extras), além de providers opcionais de
-futebol (placares ao vivo via Sofascore), clima (Open-Meteo) e próxima lua cheia.
+futebol (clubes monitorados + Copa do Mundo, via TheSportsDB e API da FIFA),
+clima (Open-Meteo) e próxima lua cheia.
 
 Roda em **Linux** (AppIndicator na barra do topo do GNOME) e em **Windows/macOS**
 (mini-janela flutuante always-on-top, ou ícone na bandeja). O mesmo entry point
@@ -80,6 +81,29 @@ Autenticação: o widget usa primeiro o token OAuth do Claude Code
 **Configuração:** a janela gráfica de configuração (times, cidade, lua, fixar na
 barra) é **só no Linux**. No Windows, use o menu **"Configurar (abrir JSON)…"**,
 que abre `%USERPROFILE%\.config\claude-widget\config.json` no editor padrão.
+
+### Futebol (clubes + Copa do Mundo)
+
+Fontes: **TheSportsDB** (chave free `3`) pra agenda/resultados e escudos, e a
+**API da FIFA** (`live/football/now`, keyless) como overlay de placar/minuto ao
+vivo. O Sofascore foi abandonado: passou a exigir desafio Cloudflare/`cf_clearance`
+que o widget não resolve.
+
+Configure no `config.json` (no Linux há também um toggle na aba de futebol):
+
+```json
+"football": {
+  "teams": [ { "name": "Avaí" }, { "name": "Flamengo" } ],
+  "world_cup": true
+}
+```
+
+- `teams`: clubes a monitorar, por **nome** (resolvido na TheSportsDB). Mostra o
+  próximo jogo (ou o último resultado), com placar/minuto ao vivo quando rolando.
+- `world_cup`: anexa os jogos da Copa do Mundo **de hoje** (ao vivo, agendados e
+  encerrados com `FT`) à rotação. Jogos de um time monitorado não duplicam.
+- `world_cup_id` (opcional): sobrescreve o id da liga da Copa na TheSportsDB
+  (default `4429`, "FIFA World Cup").
 
 ## Configurando os cookies
 

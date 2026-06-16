@@ -12,9 +12,14 @@ DEFAULT_CONFIG = {
         'claude_dir': '~/.claude',
     },
     'football': {
+        # Clubes monitorados, por nome (resolvidos na TheSportsDB):
+        # ex.: [{'name': 'Avaí'}, {'name': 'Flamengo'}]
         'teams': [],
-        'tournaments': [],
-        'live_matches': False,
+        # Anexa os jogos da Copa do Mundo de hoje (ao vivo + agendados + FT)
+        # à rotação. 'world_cup_id' sobrescreve a liga da Copa na TheSportsDB
+        # caso o default (4429, "FIFA World Cup") mude.
+        'world_cup': False,
+        'world_cup_id': None,
     },
     'weather': {
         'name': '',

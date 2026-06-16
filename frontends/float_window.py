@@ -101,13 +101,17 @@ class FloatWindow:
         self.menu.add_separator()
         self.menu.add_command(label='Sair', command=self._on_quit)
 
-        # widget fixo: sem arrasto, apenas menu de contexto (botão direito)
+        # widget fixo: sem arrasto. Botão direito abre o menu; botão esquerdo
+        # só re-eleva a pílula na hora (ao clicar, o foco vai pra barra de
+        # tarefas atrás, que sobe e cobre a janela — sem isso ela só voltaria
+        # no próximo poll, ~1s depois, parecendo "sumir e reaparecer").
         click_targets = (
             self.root, self.container, self.icon_left, self.text_rot,
             self.icon_right, self.text_tail, self.icon_pinned, self.text_pinned,
         )
         for widget in click_targets:
             widget.bind('<Button-3>', self._on_right_click)
+            widget.bind('<Button-1>', self._on_left_click)
 
         self._place_initial()
 
@@ -234,6 +238,15 @@ class FloatWindow:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
+
+    def _on_left_click(self, _event):
+        # reafirma o topmost e re-eleva imediatamente, pra não ficar coberta
+        # pela barra de tarefas depois do clique
+        try:
+            self.root.attributes('-topmost', True)
+            self.root.lift()
+        except tk.TclError:
+            pass
 
     # ---------- ações ----------
 
