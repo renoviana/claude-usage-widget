@@ -128,12 +128,38 @@ class ClaudeUsageProvider(Provider):
         v = self._extract(result.data)
         parts = []
         if v['pct_5h'] > 0:
-            parts.append(f"5h:{v['pct_5h']:.0f}%")
+            parts.append(self._bar_segment('5h', v['pct_5h'], v['five_h']))
         if v['pct_7d'] > 0:
-            parts.append(f"7d:{v['pct_7d']:.0f}%")
+            parts.append(self._bar_segment('7d', v['pct_7d'], v['seven_d']))
         if v['pct_extra'] > 0:
             parts.append(v['extra_bar'])
         return ' '.join(parts) if parts else 'Claude: idle'
+
+    @classmethod
+    def _bar_segment(cls, prefix, pct, window) -> str:
+        """Segmento da barra de uma janela. Quando esgotada (>=100%), anexa o
+        horário em que a quota volta (ex.: `5h:100% volta 18:30`)."""
+        seg = f"{prefix}:{pct:.0f}%"
+        if pct >= 100:
+            reset = cls._reset_text(window)
+            if reset:
+                seg += f' volta {reset}'
+        return seg
+
+    @staticmethod
+    def _reset_text(window) -> str | None:
+        """Horário de reset da janela em formato curto: `HH:MM` se for hoje,
+        senão `DD/MM HH:MM`."""
+        resets_at = window.get('resets_at')
+        if not resets_at:
+            return None
+        try:
+            dt = datetime.fromisoformat(resets_at.replace('Z', '+00:00')).astimezone()
+        except ValueError:
+            return None
+        if dt.date() == datetime.now().astimezone().date():
+            return dt.strftime('%H:%M')
+        return dt.strftime('%d/%m %H:%M')
 
     def menu_header(self, result: ProviderResult) -> str | None:
         if not self._is_available():
