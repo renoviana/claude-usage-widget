@@ -68,6 +68,9 @@ class FloatWindow:
         # final da janela só é conhecida depois do primeiro render.
         self._docked = False
         self._dock_band: tuple[int, int] | None = None
+        # escondida enquanto um app em tela cheia (vídeo/jogo) está em foco, pra
+        # não sobrepô-lo — mesma ideia da barra de tarefas, que some em fullscreen.
+        self._hidden = False
 
         self.root = tk.Tk()
         self.root.overrideredirect(True)          # sem barra de título/borda
@@ -186,6 +189,57 @@ class FloatWindow:
         except Exception:
             return None
 
+    def _foreground_is_fullscreen(self) -> bool:
+        """True se a janela em foco ocupa o monitor inteiro (vídeo/jogo em tela
+        cheia). Ignora o próprio shell (desktop/barra) pra não se auto-esconder.
+        """
+        if not sys.platform.startswith('win'):
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ('cbSize', wintypes.DWORD),
+                    ('rcMonitor', wintypes.RECT),
+                    ('rcWork', wintypes.RECT),
+                    ('dwFlags', wintypes.DWORD),
+                ]
+
+            u = ctypes.windll.user32
+            hwnd = u.GetForegroundWindow()
+            if not hwnd or hwnd == u.GetShellWindow():
+                return False
+            buf = ctypes.create_unicode_buffer(256)
+            u.GetClassNameW(hwnd, buf, 256)
+            if buf.value in ('Progman', 'WorkerW', 'Shell_TrayWnd',
+                             'Shell_SecondaryTrayWnd'):
+                return False
+            wr = wintypes.RECT()
+            u.GetWindowRect(hwnd, ctypes.byref(wr))
+            mon = u.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            u.GetMonitorInfoW(mon, ctypes.byref(mi))
+            m = mi.rcMonitor
+            return (wr.left <= m.left and wr.top <= m.top
+                    and wr.right >= m.right and wr.bottom >= m.bottom)
+        except Exception:
+            return False
+
+    def _update_visibility(self) -> bool:
+        """Esconde a pílula quando há app em tela cheia em foco; reexibe ao sair.
+        Retorna True se está escondida (o render do ciclo é pulado)."""
+        fullscreen = self._foreground_is_fullscreen()
+        if fullscreen and not self._hidden:
+            self.root.withdraw()
+            self._hidden = True
+        elif not fullscreen and self._hidden:
+            self.root.deiconify()
+            self._hidden = False
+        return self._hidden
+
     def _place_initial(self):
         self.root.update_idletasks()
         w = self.root.winfo_width()
@@ -263,6 +317,9 @@ class FloatWindow:
     # ---------- render / loop ----------
 
     def _render(self):
+        # Em tela cheia (vídeo/jogo), a pílula se esconde pra não sobrepor.
+        if self._update_visibility():
+            return
         # Fixos (config `pinned`) ficam sempre visíveis à direita; só os
         # rotativos giram, um por vez. Num jogo, o escudo da casa fica à esq. e
         # o do visitante grudado no nome dele: `🛡️ Casa 1x0 Fora 🛡️ 67' · Copa`.
