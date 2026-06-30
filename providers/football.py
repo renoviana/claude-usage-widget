@@ -43,12 +43,22 @@ REFRESH_IDLE = 600           # nada acontecendo
 PREGAME_SOON_WINDOW = 30 * 60  # 30 minutos
 SHOW_UPCOMING_WINDOW = 7 * 24 * 3600  # só mostra jogos futuros dentro de 1 semana
 
+# Ligas ignoradas por padrão (amistosos não oficiais, irrelevantes / sujeitos a cancelamento)
+_SKIP_LEAGUES_DEFAULT = {'Club Friendlies', 'International Friendlies', 'Friendlies'}
+
 _CACHE_DIR = os.path.expanduser('~/.cache/claude-widget')
 
-# Status da TheSportsDB que mapeiam pra "não começou" / "encerrado"
-_UPCOMING_STATUS = {'', 'NS', 'Not Started', 'TBD', 'Postponed', 'Cancelled'}
+# Status da TheSportsDB que mapeiam pra "não começou" / "encerrado" / "ao vivo"
+_UPCOMING_STATUS = {
+    '', 'NS', 'Not Started', 'TBD', 'Postponed', 'Cancelled',
+    'Sched', 'Scheduled', 'Delayed', 'Suspended', 'Interrupted',
+}
 _FINISHED_STATUS = {
     'FT', 'Match Finished', 'AET', 'After Extra Time', 'PEN', 'Penalties', 'AP',
+    'Abandoned', 'WO', 'AWD',
+}
+_LIVE_STATUS = {
+    '1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'Live', 'In Progress',
 }
 
 # Cache name→time (TheSportsDB) por processo, evita refazer searchteams toda hora
@@ -141,7 +151,9 @@ def _classify(status_raw: str) -> str:
         return 'finished'
     if status_raw in _UPCOMING_STATUS:
         return 'upcoming'
-    return 'live'
+    if status_raw in _LIVE_STATUS:
+        return 'live'
+    return 'upcoming'  # status desconhecido → não trava como "ao vivo"
 
 
 def _fifa_team_name(team: dict | None) -> str:
@@ -333,6 +345,12 @@ class FootballProvider(Provider):
             return None
 
         m = _match_from_tsdb(ev, live_idx, pin_id=pin_id)
+        # amistosos ignorados por padrão (cancelamentos frequentes, sem relevância)
+        skip_leagues = _SKIP_LEAGUES_DEFAULT
+        if self._config.get('show_friendlies'):
+            skip_leagues = set()
+        if m['league'] in skip_leagues:
+            return None
         # jogo futuro a mais de 1 semana → não exibe
         if m['state'] == 'upcoming' and m['start']:
             if m['start'] - time.time() > SHOW_UPCOMING_WINDOW:
